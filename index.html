@@ -247,7 +247,11 @@
   import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4/+esm';
 
   // ---- URL de démo (scène publique de la lib). Remplace-la par ta propre capture. ----
-  const DEMO_URL = 'https://projects.markkellogg.org/downloads/gaussian_splat_data/garden/garden_high.ksplat';
+  // Variante "low" : sharedMemoryForWorkers est désactivé (obligatoire sur GitHub Pages,
+  // pas de headers COOP/COEP), ce qui ralentit beaucoup le tri des splats. La version
+  // "high" devient alors trop lourde et donne l'impression que le chargement est bloqué.
+  const DEMO_URL = 'https://projects.markkellogg.org/downloads/gaussian_splat_data/garden/garden_low.ksplat';
+  const DEMO_NAME = 'garden_low.ksplat';
 
   const el = id => document.getElementById(id);
   const stage = el('stage');
@@ -301,10 +305,12 @@
     rafFps = requestAnimationFrame(loop);
   }
 
+  const stageLabel = { 0: 'Téléchargement', 1: 'Traitement', 2: 'Terminé' }; // LoaderStatus.{Downloading,Processing,Done}
+
   async function loadScene(url, displayName, format){
     await teardown();
     emptyState.classList.add('hidden');
-    setStatus('Reconstruction de la scène…');
+    setStatus('Chargement…');
 
     // sharedMemoryForWorkers:false → indispensable sur GitHub Pages
     // (pas d'en-têtes COOP/COEP, donc pas de SharedArrayBuffer).
@@ -316,7 +322,15 @@
       initialCameraLookAt: [0, 4, 0],
     });
 
-    const opts = { showLoadingUI: true, splatAlphaRemovalThreshold: 5 };
+    // showLoadingUI:false → on pilote nous-mêmes la barre de statut (onProgress)
+    // plutôt que de superposer le spinner intégré de la lib au-dessus du nôtre.
+    const opts = {
+      showLoadingUI: false,
+      splatAlphaRemovalThreshold: 5,
+      onProgress: (percent, percentLabel, loaderStatus) => {
+        setStatus(`${stageLabel[loaderStatus] || 'Chargement'}… ${percentLabel}`);
+      },
+    };
     if(format !== undefined) opts.format = format;
 
     try{
@@ -346,8 +360,8 @@
   // ---- Contrôles ----
   el('fileInput').addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
   el('emptyOpen').addEventListener('click', () => el('fileInput').click());
-  el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, 'garden.ksplat', GaussianSplats3D.SceneFormat.KSplat));
-  el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, 'garden.ksplat', GaussianSplats3D.SceneFormat.KSplat));
+  el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, GaussianSplats3D.SceneFormat.KSplat));
+  el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, GaussianSplats3D.SceneFormat.KSplat));
 
   function loadFromUrl(){
     const u = el('urlInput').value.trim();
