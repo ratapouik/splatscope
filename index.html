@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SPLATSCOPE — Viewer Gaussian Splatting</title>
+
+<!-- Polices : instrument technique (grotesk) + lecture de données (mono) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg:#0a0e13;
+    --panel:#111820;
+    --panel-2:#0d141b;
+    --line:rgba(120,150,175,.16);
+    --line-strong:rgba(120,150,175,.32);
+    --txt:#e7eef5;
+    --muted:#7c8b9a;
+    --signal:#3fd7c9;          /* cyan instrument : lectures actives */
+    --signal-dim:rgba(63,215,201,.14);
+    --live:#f0b64a;            /* ambre : indicateur "scène chargée" */
+    --danger:#ff6b6b;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--txt);
+    font-family:"Space Grotesk",system-ui,sans-serif;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---------- Barre supérieure ---------- */
+  header{
+    position:fixed;top:0;left:0;right:0;height:52px;z-index:20;
+    display:flex;align-items:center;gap:18px;
+    padding:0 16px;
+    background:linear-gradient(180deg,rgba(10,14,19,.92),rgba(10,14,19,.72));
+    border-bottom:1px solid var(--line);
+    backdrop-filter:blur(8px);
+  }
+  .brand{display:flex;align-items:baseline;gap:9px;user-select:none}
+  .brand .mark{
+    font-weight:600;letter-spacing:.14em;font-size:14px;
+    color:var(--txt);
+  }
+  .brand .mark b{color:var(--signal);font-weight:600}
+  .brand .sub{
+    font-family:"JetBrains Mono",monospace;font-size:10px;
+    color:var(--muted);letter-spacing:.08em;text-transform:uppercase;
+  }
+
+  .controls{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+  .btn{
+    font-family:"JetBrains Mono",monospace;font-size:11.5px;letter-spacing:.04em;
+    color:var(--txt);background:var(--panel);
+    border:1px solid var(--line-strong);border-radius:2px;
+    padding:8px 12px;cursor:pointer;transition:.15s border-color,.15s color,.15s background;
+    white-space:nowrap;
+  }
+  .btn:hover{border-color:var(--signal);color:var(--signal)}
+  .btn.primary{border-color:var(--signal);color:var(--signal);background:var(--signal-dim)}
+  .btn.primary:hover{background:rgba(63,215,201,.22)}
+  .url-field{
+    display:flex;align-items:center;background:var(--panel);
+    border:1px solid var(--line-strong);border-radius:2px;overflow:hidden;
+  }
+  .url-field input{
+    background:transparent;border:0;outline:0;color:var(--txt);
+    font-family:"JetBrains Mono",monospace;font-size:11.5px;
+    padding:8px 10px;width:210px;
+  }
+  .url-field input::placeholder{color:var(--muted)}
+  @media(max-width:720px){
+    .url-field{display:none}
+    .brand .sub{display:none}
+  }
+
+  /* ---------- Zone de rendu (le héros) ---------- */
+  #stage{position:fixed;inset:52px 0 0 0;z-index:1}
+  #viewer{position:absolute;inset:0}
+  #viewer canvas{display:block;width:100%!important;height:100%!important;outline:none}
+
+  /* réticule de viseur : clin d'œil optique / relevé terrain */
+  .reticle{position:absolute;inset:22px;pointer-events:none;z-index:5}
+  .reticle span{position:absolute;width:16px;height:16px;border-color:var(--line-strong);border-style:solid;border-width:0}
+  .reticle .tl{top:0;left:0;border-top-width:1px;border-left-width:1px}
+  .reticle .tr{top:0;right:0;border-top-width:1px;border-right-width:1px}
+  .reticle .bl{bottom:0;left:0;border-bottom-width:1px;border-left-width:1px}
+  .reticle .br{bottom:0;right:0;border-bottom-width:1px;border-right-width:1px}
+
+  /* ---------- État vide ---------- */
+  #empty{
+    position:absolute;inset:0;z-index:8;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;
+    text-align:center;padding:24px;
+    animation:fade .5s ease both;
+  }
+  #empty.hidden{display:none}
+  .drop-frame{
+    width:min(440px,86vw);padding:38px 28px;border:1px dashed var(--line-strong);
+    border-radius:4px;background:var(--panel-2);transition:.18s border-color,.18s background;
+  }
+  #stage.dragging .drop-frame{border-color:var(--signal);background:rgba(63,215,201,.06)}
+  .drop-frame h1{
+    font-size:19px;font-weight:500;letter-spacing:-.01em;margin-bottom:8px;
+  }
+  .drop-frame p{color:var(--muted);font-size:13px;line-height:1.55}
+  .drop-frame .fmt{
+    font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--signal);
+    letter-spacing:.06em;margin-top:16px;
+  }
+  .empty-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+
+  /* ---------- HUD lectures ---------- */
+  .hud{
+    position:absolute;z-index:9;font-family:"JetBrains Mono",monospace;
+    background:linear-gradient(180deg,rgba(13,20,27,.86),rgba(13,20,27,.7));
+    border:1px solid var(--line);border-radius:3px;backdrop-filter:blur(6px);
+  }
+  #readout{left:16px;bottom:16px;padding:11px 13px;min-width:190px}
+  .row{display:flex;justify-content:space-between;gap:22px;font-size:11px;line-height:1.9}
+  .row .k{color:var(--muted);letter-spacing:.05em;text-transform:uppercase;font-size:9.5px}
+  .row .v{color:var(--signal)}
+  .live-dot{
+    display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);
+    margin-right:6px;vertical-align:middle;
+  }
+  .live .live-dot{background:var(--live);box-shadow:0 0 0 0 rgba(240,182,74,.6);animation:pulse 1.8s infinite}
+
+  #hint{right:16px;bottom:16px;padding:9px 12px;color:var(--muted);font-size:10px;letter-spacing:.04em;line-height:1.8}
+  #hint b{color:var(--txt);font-weight:500}
+  @media(max-width:720px){#hint{display:none}}
+
+  /* barre d'état de chargement */
+  #status{
+    position:absolute;left:50%;top:20px;transform:translateX(-50%);z-index:12;
+    font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.05em;
+    padding:7px 14px;border-radius:2px;border:1px solid var(--line-strong);
+    background:var(--panel);color:var(--signal);display:none;align-items:center;gap:9px;
+  }
+  #status.show{display:flex}
+  #status.err{color:var(--danger);border-color:rgba(255,107,107,.4)}
+  .spin{width:11px;height:11px;border:1.5px solid var(--signal-dim);border-top-color:var(--signal);border-radius:50%;animation:rot .7s linear infinite}
+
+  /* ---------- Note repliable ---------- */
+  #note{
+    position:absolute;left:16px;top:16px;z-index:10;max-width:300px;
+    font-family:"JetBrains Mono",monospace;
+  }
+  #note summary{
+    list-style:none;cursor:pointer;font-size:10.5px;letter-spacing:.05em;
+    color:var(--muted);border:1px solid var(--line);border-radius:2px;
+    padding:7px 11px;background:var(--panel);display:inline-flex;align-items:center;gap:7px;
+  }
+  #note summary::-webkit-details-marker{display:none}
+  #note summary:hover{color:var(--signal);border-color:var(--line-strong)}
+  #note[open] summary{color:var(--signal)}
+  #note .body{
+    margin-top:8px;padding:13px;border:1px solid var(--line);border-radius:3px;
+    background:var(--panel-2);font-size:11px;line-height:1.7;color:var(--muted);
+  }
+  #note .body b{color:var(--txt);font-weight:500}
+  #note .body code{color:var(--signal);font-size:10.5px}
+  #note .body ol{margin:8px 0 0 16px;padding:0}
+  #note .body li{margin-bottom:5px}
+
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(240,182,74,.5)}70%{box-shadow:0 0 0 7px rgba(240,182,74,0)}100%{box-shadow:0 0 0 0 rgba(240,182,74,0)}}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+  :focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+  input[type=file]{display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="mark">SPLAT<b>SCOPE</b></span>
+    <span class="sub">gaussian splatting · viewer</span>
+  </div>
+  <div class="controls">
+    <div class="url-field">
+      <input id="urlInput" type="text" placeholder="URL .ply / .splat / .ksplat" spellcheck="false" />
+    </div>
+    <button class="btn" id="urlBtn">Charger URL</button>
+    <button class="btn" id="demoBtn">Démo</button>
+    <label class="btn primary" for="fileInput" tabindex="0">Ouvrir un fichier</label>
+    <input id="fileInput" type="file" accept=".ply,.splat,.ksplat" />
+  </div>
+</header>
+
+<div id="stage">
+  <div id="viewer"></div>
+
+  <div class="reticle"><span class="tl"></span><span class="tr"></span><span class="bl"></span><span class="br"></span></div>
+
+  <div id="status"><span class="spin"></span><span id="statusText">Chargement…</span></div>
+
+  <details id="note">
+    <summary>ⓘ Comment produire un fichier .splat ?</summary>
+    <div class="body">
+      Cette appli <b>visualise</b> un modèle déjà reconstruit — la reconstruction
+      (GPU) se fait <b>hors-ligne</b>, une fois :
+      <ol>
+        <li>Vidéo → images (ffmpeg)</li>
+        <li>Poses caméra → <b>COLMAP</b></li>
+        <li>Entraînement → <b>Nerfstudio / gsplat</b> (RTX locale ou Google Colab)</li>
+        <li>Export <code>.ply</code>, nettoyage sur <b>SuperSplat</b>, puis dépôt du fichier ici</li>
+      </ol>
+    </div>
+  </details>
+
+  <div id="empty">
+    <div class="drop-frame">
+      <h1>Dépose un modèle 3D</h1>
+      <p>Glisse un fichier de splats dans la fenêtre, ouvre-le depuis ton disque,<br>ou charge-le depuis une URL.</p>
+      <div class="fmt">.PLY · .SPLAT · .KSPLAT</div>
+    </div>
+    <div class="empty-actions">
+      <button class="btn primary" id="emptyOpen">Ouvrir un fichier</button>
+      <button class="btn" id="emptyDemo">Charger la démo</button>
+    </div>
+  </div>
+
+  <div class="hud" id="readout">
+    <div class="row"><span class="k"><span class="live-dot"></span>Scène</span><span class="v" id="rScene">—</span></div>
+    <div class="row"><span class="k">Format</span><span class="v" id="rFormat">—</span></div>
+    <div class="row"><span class="k">FPS</span><span class="v" id="rFps">—</span></div>
+  </div>
+
+  <div class="hud" id="hint">
+    <b>glisser</b> orbite · <b>molette</b> zoom · <b>clic droit</b> panorama
+  </div>
+</div>
+
+<script type="module">
+  // Bibliothèque de rendu : viewer Three.js de mkkellogg (MIT), via CDN ESM.
+  // Pour figer/mettre à jour la version, change le "@0.4" ci-dessous.
+  import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4/+esm';
+
+  // ---- URL de démo (scène publique de la lib). Remplace-la par ta propre capture. ----
+  const DEMO_URL = 'https://projects.markkellogg.org/downloads/gaussian_splat_data/garden/garden_high.ksplat';
+
+  const el = id => document.getElementById(id);
+  const stage = el('stage');
+  const emptyState = el('empty');
+  const readout = el('readout');
+  const statusBox = el('status'), statusText = el('statusText');
+
+  let viewer = null;      // instance courante
+  let rafFps = null;      // boucle FPS
+  let objectUrl = null;   // pour révoquer les blobs
+
+  function setStatus(msg, isError=false){
+    statusText.textContent = msg;
+    statusBox.classList.toggle('err', isError);
+    statusBox.querySelector('.spin').style.display = isError ? 'none' : '';
+    statusBox.classList.add('show');
+    if(isError) setTimeout(()=>statusBox.classList.remove('show'), 4200);
+  }
+  const clearStatus = () => statusBox.classList.remove('show');
+
+  function formatFromName(name){
+    const n = name.toLowerCase();
+    if(n.endsWith('.ksplat')) return GaussianSplats3D.SceneFormat.KSplat;
+    if(n.endsWith('.splat'))  return GaussianSplats3D.SceneFormat.Splat;
+    if(n.endsWith('.ply'))    return GaussianSplats3D.SceneFormat.Ply;
+    return undefined; // laisse la lib deviner
+  }
+  const formatLabel = name => (name.split('.').pop() || '').toUpperCase();
+
+  async function teardown(){
+    if(rafFps){ cancelAnimationFrame(rafFps); rafFps = null; }
+    if(viewer){
+      try{ await viewer.dispose(); }catch(e){}
+      viewer = null;
+    }
+    el('viewer').innerHTML = '';
+    if(objectUrl){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
+  }
+
+  function startFpsMeter(){
+    let frames = 0, last = performance.now();
+    const loop = () => {
+      frames++;
+      const now = performance.now();
+      if(now - last >= 1000){
+        el('rFps').textContent = frames;
+        frames = 0; last = now;
+      }
+      rafFps = requestAnimationFrame(loop);
+    };
+    rafFps = requestAnimationFrame(loop);
+  }
+
+  async function loadScene(url, displayName, format){
+    await teardown();
+    emptyState.classList.add('hidden');
+    setStatus('Reconstruction de la scène…');
+
+    // sharedMemoryForWorkers:false → indispensable sur GitHub Pages
+    // (pas d'en-têtes COOP/COEP, donc pas de SharedArrayBuffer).
+    viewer = new GaussianSplats3D.Viewer({
+      rootElement: el('viewer'),
+      sharedMemoryForWorkers: false,
+      cameraUp: [0, -1, -0.6],
+      initialCameraPosition: [-1, -4, 6],
+      initialCameraLookAt: [0, 4, 0],
+    });
+
+    const opts = { showLoadingUI: true, splatAlphaRemovalThreshold: 5 };
+    if(format !== undefined) opts.format = format;
+
+    try{
+      await viewer.addSplatScene(url, opts);
+      viewer.start();
+      clearStatus();
+      readout.classList.add('live');
+      el('rScene').textContent = displayName.length > 22 ? displayName.slice(0,21)+'…' : displayName;
+      el('rFormat').textContent = formatLabel(displayName);
+      startFpsMeter();
+    }catch(err){
+      console.error(err);
+      setStatus('Échec du chargement — vérifie le format / la CORS', true);
+      await teardown();
+      emptyState.classList.remove('hidden');
+      readout.classList.remove('live');
+      el('rScene').textContent = '—'; el('rFormat').textContent = '—'; el('rFps').textContent = '—';
+    }
+  }
+
+  function loadFile(file){
+    if(objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+    loadScene(objectUrl, file.name, formatFromName(file.name));
+  }
+
+  // ---- Contrôles ----
+  el('fileInput').addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
+  el('emptyOpen').addEventListener('click', () => el('fileInput').click());
+  el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, 'garden.ksplat', GaussianSplats3D.SceneFormat.KSplat));
+  el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, 'garden.ksplat', GaussianSplats3D.SceneFormat.KSplat));
+
+  function loadFromUrl(){
+    const u = el('urlInput').value.trim();
+    if(!u) return;
+    const name = u.split('/').pop().split('?')[0] || 'scene';
+    loadScene(u, name, formatFromName(name));
+  }
+  el('urlBtn').addEventListener('click', loadFromUrl);
+  el('urlInput').addEventListener('keydown', e => { if(e.key === 'Enter') loadFromUrl(); });
+
+  // ---- Glisser-déposer ----
+  ['dragenter','dragover'].forEach(ev =>
+    stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add('dragging'); }));
+  ['dragleave','drop'].forEach(ev =>
+    stage.addEventListener(ev, e => { e.preventDefault(); if(ev!=='dragleave'||e.target===stage) stage.classList.remove('dragging'); }));
+  stage.addEventListener('drop', e => {
+    const f = e.dataTransfer.files[0];
+    if(f) loadFile(f);
+  });
+</script>
+</body>
+</html>
