@@ -319,37 +319,53 @@
     isLoading = true;
     loadTriggers.forEach(id => el(id).disabled = true);
 
-    // Révoque le blob précédent, sauf si c'est justement celui qu'on charge
-    // (loadFile() l'a déjà assigné à `objectUrl` avant d'appeler loadScene).
-    if(objectUrl && objectUrl !== url){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
-
-    await teardown();
-    emptyState.classList.add('hidden');
-    setStatus('Chargement…');
-
-    // sharedMemoryForWorkers:false → indispensable sur GitHub Pages
-    // (pas d'en-têtes COOP/COEP, donc pas de SharedArrayBuffer).
-    viewer = new GaussianSplats3D.Viewer({
-      rootElement: el('viewer'),
-      sharedMemoryForWorkers: false,
-      cameraUp: [0, -1, -0.6],
-      initialCameraPosition: [-1, -4, 6],
-      initialCameraLookAt: [0, 4, 0],
-    });
-
-    // showLoadingUI:false → on pilote nous-mêmes la barre de statut (onProgress)
-    // plutôt que de superposer le spinner intégré de la lib au-dessus du nôtre.
-    const opts = {
-      showLoadingUI: false,
-      splatAlphaRemovalThreshold: 5,
-      onProgress: (percent, percentLabel, loaderStatus) => {
-        setStatus(`${stageLabel[loaderStatus] || 'Chargement'}… ${percentLabel}`);
-      },
-    };
-    if(format !== undefined) opts.format = format;
-
     try{
-      await viewer.addSplatScene(url, opts);
+      // Révoque le blob précédent, sauf si c'est justement celui qu'on charge
+      // (loadFile() l'a déjà assigné à `objectUrl` avant d'appeler loadScene).
+      if(objectUrl && objectUrl !== url){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
+
+      await teardown();
+      emptyState.classList.add('hidden');
+      setStatus('Chargement…');
+
+      // sharedMemoryForWorkers:false → indispensable sur GitHub Pages
+      // (pas d'en-têtes COOP/COEP, donc pas de SharedArrayBuffer).
+      viewer = new GaussianSplats3D.Viewer({
+        rootElement: el('viewer'),
+        sharedMemoryForWorkers: false,
+        cameraUp: [0, -1, -0.6],
+        initialCameraPosition: [-1, -4, 6],
+        initialCameraLookAt: [0, 4, 0],
+      });
+
+      // showLoadingUI:false → on pilote nous-mêmes la barre de statut (onProgress)
+      // plutôt que de superposer le spinner intégré de la lib au-dessus du nôtre.
+      let lastProgressAt = Date.now();
+      const opts = {
+        showLoadingUI: false,
+        splatAlphaRemovalThreshold: 5,
+        onProgress: (percent, percentLabel, loaderStatus) => {
+          lastProgressAt = Date.now();
+          setStatus(`${stageLabel[loaderStatus] || 'Chargement'}… ${percentLabel}`);
+        },
+      };
+      if(format !== undefined) opts.format = format;
+
+      // Garde-fou : si aucune progression n'arrive plus pendant 20s (connexion
+      // qui a bronché, réponse sans Content-Length forçant un chargement non
+      // incrémental qui n'aboutit jamais, etc.), on abandonne proprement au lieu
+      // de rester figé indéfiniment sans recours pour l'utilisateur.
+      const STALL_TIMEOUT_MS = 20000;
+      const stallWatch = new Promise((_, reject) => {
+        const interval = setInterval(() => {
+          if(Date.now() - lastProgressAt > STALL_TIMEOUT_MS){
+            clearInterval(interval);
+            reject(new Error(`Chargement interrompu : aucune progression depuis ${STALL_TIMEOUT_MS / 1000}s`));
+          }
+        }, 1000);
+      });
+
+      await Promise.race([viewer.addSplatScene(url, opts), stallWatch]);
       viewer.start();
       clearStatus();
       readout.classList.add('live');
@@ -358,7 +374,7 @@
       startFpsMeter();
     }catch(err){
       console.error(err);
-      setStatus('Échec du chargement — vérifie le format / la CORS', true);
+      setStatus('Échec du chargement — vérifie le format, la CORS, ou réessaie (connexion lente ?)', true);
       await teardown();
       emptyState.classList.remove('hidden');
       readout.classList.remove('live');
