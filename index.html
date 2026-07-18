@@ -290,7 +290,6 @@
       viewer = null;
     }
     el('viewer').innerHTML = '';
-    if(objectUrl){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
   }
 
   function startFpsMeter(){
@@ -308,8 +307,22 @@
   }
 
   const stageLabel = { 0: 'Téléchargement', 1: 'Traitement', 2: 'Terminé' }; // LoaderStatus.{Downloading,Processing,Done}
+  const loadTriggers = ['demoBtn', 'emptyDemo', 'urlBtn', 'fileInput', 'emptyOpen'];
+  let isLoading = false;
 
   async function loadScene(url, displayName, format){
+    // Un deuxième clic pendant un chargement en cours démonterait (teardown) le
+    // viewer en plein milieu du chargement précédent, ce qui fait échouer
+    // addSplatScene avec "Could not load file" — donc on ignore les appels
+    // concurrents plutôt que de les laisser se marcher dessus.
+    if(isLoading) return;
+    isLoading = true;
+    loadTriggers.forEach(id => el(id).disabled = true);
+
+    // Révoque le blob précédent, sauf si c'est justement celui qu'on charge
+    // (loadFile() l'a déjà assigné à `objectUrl` avant d'appeler loadScene).
+    if(objectUrl && objectUrl !== url){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
+
     await teardown();
     emptyState.classList.add('hidden');
     setStatus('Chargement…');
@@ -350,6 +363,9 @@
       emptyState.classList.remove('hidden');
       readout.classList.remove('live');
       el('rScene').textContent = '—'; el('rFormat').textContent = '—'; el('rFps').textContent = '—';
+    }finally{
+      isLoading = false;
+      loadTriggers.forEach(id => el(id).disabled = false);
     }
   }
 
