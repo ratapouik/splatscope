@@ -247,11 +247,12 @@
   import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4/+esm';
 
   // ---- URL de démo (scène publique de la lib). Remplace-la par ta propre capture. ----
-  // Variante "low" : sharedMemoryForWorkers est désactivé (obligatoire sur GitHub Pages,
-  // pas de headers COOP/COEP), ce qui ralentit beaucoup le tri des splats. La version
-  // "high" devient alors trop lourde et donne l'impression que le chargement est bloqué.
-  const DEMO_URL = 'https://projects.markkellogg.org/downloads/gaussian_splat_data/garden/garden_low.ksplat';
-  const DEMO_NAME = 'garden_low.ksplat';
+  // Variante standard (pas "_high") : sharedMemoryForWorkers est désactivé (obligatoire
+  // sur GitHub Pages, pas de headers COOP/COEP), ce qui ralentit beaucoup le tri des
+  // splats. La version "high" devient alors trop lourde et donne l'impression que le
+  // chargement est bloqué.
+  const DEMO_URL = 'https://projects.markkellogg.org/downloads/gaussian_splat_data/garden/garden.ksplat';
+  const DEMO_NAME = 'garden.ksplat';
 
   const el = id => document.getElementById(id);
   const stage = el('stage');
