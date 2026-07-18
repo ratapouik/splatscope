@@ -252,7 +252,13 @@
   // testés (projects.markkellogg.org, media.reshot.ai) ne renvoient pas d'en-têtes
   // CORS permissifs, ce qui casse le fetch cross-origin depuis GitHub Pages. En
   // même origine que la page, ce problème ne peut structurellement pas se poser.
-  const DEMO_URL = 'models/demo.splat';
+  //
+  // ?v=N (cache-buster) : incrémenter à chaque fois que demo.splat change de contenu.
+  // Sans ça, GitHub Pages ne renvoie pas d'ETag/Last-Modified assez précis pour que le
+  // navigateur revalide, et il peut continuer à resservir indéfiniment depuis le cache
+  // disque une réponse antérieure tronquée/corrompue (ex. un téléchargement interrompu
+  // sur un réseau mobile instable) sans jamais re-frapper le réseau.
+  const DEMO_URL = 'models/demo.splat?v=2';
   const DEMO_NAME = 'demo.splat';
 
   const el = id => document.getElementById(id);
