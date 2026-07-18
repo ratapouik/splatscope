@@ -246,13 +246,14 @@
   // Pour figer/mettre à jour la version, change le "@0.4" ci-dessous.
   import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4/+esm';
 
-  // ---- URL de démo (scène publique de la lib). Remplace-la par ta propre capture. ----
-  // Variante standard (pas "_high") : sharedMemoryForWorkers est désactivé (obligatoire
-  // sur GitHub Pages, pas de headers COOP/COEP), ce qui ralentit beaucoup le tri des
-  // splats. La version "high" devient alors trop lourde et donne l'impression que le
-  // chargement est bloqué.
-  const DEMO_URL = 'https://projects.markkellogg.org/downloads/gaussian_splat_data/garden/garden.ksplat';
-  const DEMO_NAME = 'garden.ksplat';
+  // ---- URL de démo. ----
+  // Scène synthétique (sphère procédurale) générée et hébergée directement dans ce
+  // repo (models/demo.splat) plutôt que sur un host tiers : les CDN de démo publics
+  // testés (projects.markkellogg.org, media.reshot.ai) ne renvoient pas d'en-têtes
+  // CORS permissifs, ce qui casse le fetch cross-origin depuis GitHub Pages. En
+  // même origine que la page, ce problème ne peut structurellement pas se poser.
+  const DEMO_URL = 'models/demo.splat';
+  const DEMO_NAME = 'demo.splat';
 
   const el = id => document.getElementById(id);
   const stage = el('stage');
@@ -361,8 +362,8 @@
   // ---- Contrôles ----
   el('fileInput').addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
   el('emptyOpen').addEventListener('click', () => el('fileInput').click());
-  el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, GaussianSplats3D.SceneFormat.KSplat));
-  el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, GaussianSplats3D.SceneFormat.KSplat));
+  el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, formatFromName(DEMO_NAME)));
+  el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, formatFromName(DEMO_NAME)));
 
   function loadFromUrl(){
     const u = el('urlInput').value.trim();
