@@ -32,6 +32,8 @@ Les fichiers de splats sont volumineux. **GitHub bloque tout fichier > 100 Mo**,
 
 Formats acceptés par le viewer : `.ply`, `.splat`, `.ksplat`.
 
+Le bouton **Nettoyer ↗** ouvre la scène courante directement dans [SuperSplat](https://superspl.at/editor) (bruit, points isolés, rognage...). Pour une scène chargée via URL ou la démo, elle s'ouvre automatiquement ; pour un fichier local, l'éditeur s'ouvre nu et il suffit d'y glisser-déposer le fichier.
+
 ---
 
 ## Structure

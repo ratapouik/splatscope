@@ -194,6 +194,7 @@
     <button class="btn" id="demoBtn">Démo</button>
     <label class="btn primary" for="fileInput" tabindex="0">Ouvrir un fichier</label>
     <input id="fileInput" type="file" accept=".ply,.splat,.ksplat" />
+    <button class="btn" id="superSplatBtn" title="Ouvrir dans SuperSplat pour nettoyer la scène (supprimer le bruit, rogner, etc.)">Nettoyer ↗</button>
   </div>
 </header>
 
@@ -270,6 +271,7 @@
   let viewer = null;      // instance courante
   let rafFps = null;      // boucle FPS
   let objectUrl = null;   // pour révoquer les blobs
+  let currentSceneUrl = null; // URL absolue de la scène courante, si elle est publique (pas un blob local)
 
   function setStatus(msg, isError=false){
     statusText.textContent = msg;
@@ -378,6 +380,9 @@
       el('rScene').textContent = displayName.length > 22 ? displayName.slice(0,21)+'…' : displayName;
       el('rFormat').textContent = formatLabel(displayName);
       startFpsMeter();
+      // Un fichier local (blob:) n'est pas accessible depuis SuperSplat (autre origine) ;
+      // seule une URL publique peut lui être transmise via son paramètre ?load=.
+      currentSceneUrl = url.startsWith('blob:') ? null : new URL(url, location.href).href;
     }catch(err){
       console.error(err);
       setStatus('Échec du chargement — vérifie le format, la CORS, ou réessaie (connexion lente ?)', true);
@@ -385,6 +390,7 @@
       emptyState.classList.remove('hidden');
       readout.classList.remove('live');
       el('rScene').textContent = '—'; el('rFormat').textContent = '—'; el('rFps').textContent = '—';
+      currentSceneUrl = null;
     }finally{
       isLoading = false;
       loadTriggers.forEach(id => el(id).disabled = false);
@@ -402,6 +408,15 @@
   el('emptyOpen').addEventListener('click', () => el('fileInput').click());
   el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, formatFromName(DEMO_NAME)));
   el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, formatFromName(DEMO_NAME)));
+
+  // Un fichier ouvert localement (blob:) ne peut pas être transmis à SuperSplat
+  // (autre origine) : on ouvre alors l'éditeur nu pour un glisser-déposer manuel.
+  el('superSplatBtn').addEventListener('click', () => {
+    const target = currentSceneUrl
+      ? `https://superspl.at/editor?load=${encodeURIComponent(currentSceneUrl)}`
+      : 'https://superspl.at/editor';
+    window.open(target, '_blank', 'noopener');
+  });
 
   function loadFromUrl(){
     const u = el('urlInput').value.trim();
