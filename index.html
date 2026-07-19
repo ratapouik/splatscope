@@ -191,9 +191,10 @@
       <input id="urlInput" type="text" placeholder="URL .ply / .splat / .ksplat" spellcheck="false" />
     </div>
     <button class="btn" id="urlBtn">Charger URL</button>
-    <button class="btn" id="demoBtn">Démo</button>
     <label class="btn primary" for="fileInput" tabindex="0">Ouvrir un fichier</label>
     <input id="fileInput" type="file" accept=".ply,.splat,.ksplat" />
+    <label class="btn" for="meshFileInput" tabindex="0" title="Charger un mesh reconstruit (ex. export SuGaR), pas un nuage de splats">Mesh SuGaR</label>
+    <input id="meshFileInput" type="file" accept=".ply" />
     <button class="btn" id="superSplatBtn" title="Ouvrir dans SuperSplat pour nettoyer la scène (supprimer le bruit, rogner, etc.)">Nettoyer ↗</button>
   </div>
 </header>
@@ -227,7 +228,7 @@
     </div>
     <div class="empty-actions">
       <button class="btn primary" id="emptyOpen">Ouvrir un fichier</button>
-      <button class="btn" id="emptyDemo">Charger la démo</button>
+      <button class="btn" id="emptyMesh">Ouvrir un mesh SuGaR</button>
     </div>
   </div>
 
@@ -246,21 +247,6 @@
   // Bibliothèque de rendu : viewer Three.js de mkkellogg (MIT), via CDN ESM.
   // Pour figer/mettre à jour la version, change le "@0.4" ci-dessous.
   import * as GaussianSplats3D from 'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4/+esm';
-
-  // ---- URL de démo. ----
-  // Scène synthétique (sphère procédurale) générée et hébergée directement dans ce
-  // repo (models/demo.splat) plutôt que sur un host tiers : les CDN de démo publics
-  // testés (projects.markkellogg.org, media.reshot.ai) ne renvoient pas d'en-têtes
-  // CORS permissifs, ce qui casse le fetch cross-origin depuis GitHub Pages. En
-  // même origine que la page, ce problème ne peut structurellement pas se poser.
-  //
-  // ?v=N (cache-buster) : incrémenter à chaque fois que demo.splat change de contenu.
-  // Sans ça, GitHub Pages ne renvoie pas d'ETag/Last-Modified assez précis pour que le
-  // navigateur revalide, et il peut continuer à resservir indéfiniment depuis le cache
-  // disque une réponse antérieure tronquée/corrompue (ex. un téléchargement interrompu
-  // sur un réseau mobile instable) sans jamais re-frapper le réseau.
-  const DEMO_URL = 'models/demo.splat?v=2';
-  const DEMO_NAME = 'demo.splat';
 
   const el = id => document.getElementById(id);
   const stage = el('stage');
@@ -291,12 +277,17 @@
   }
   const formatLabel = name => (name.split('.').pop() || '').toUpperCase();
 
+  let meshRenderer = null, meshRAF = null, meshResizeHandler = null;
+
   async function teardown(){
     if(rafFps){ cancelAnimationFrame(rafFps); rafFps = null; }
     if(viewer){
       try{ await viewer.dispose(); }catch(e){}
       viewer = null;
     }
+    if(meshRAF){ cancelAnimationFrame(meshRAF); meshRAF = null; }
+    if(meshResizeHandler){ window.removeEventListener('resize', meshResizeHandler); meshResizeHandler = null; }
+    if(meshRenderer){ meshRenderer.dispose(); meshRenderer = null; }
     el('viewer').innerHTML = '';
   }
 
@@ -315,7 +306,7 @@
   }
 
   const stageLabel = { 0: 'Téléchargement', 1: 'Traitement', 2: 'Terminé' }; // LoaderStatus.{Downloading,Processing,Done}
-  const loadTriggers = ['demoBtn', 'emptyDemo', 'urlBtn', 'fileInput', 'emptyOpen'];
+  const loadTriggers = ['urlBtn', 'fileInput', 'emptyOpen', 'meshFileInput', 'emptyMesh'];
   let isLoading = false;
 
   async function loadScene(url, displayName, format){
@@ -403,11 +394,124 @@
     loadScene(objectUrl, file.name, formatFromName(file.name));
   }
 
+  // ---- Mesh (ex. export SuGaR) : rendu Three.js indépendant du viewer de splats,
+  // via les mêmes modules ESM CDN (three + addons PLYLoader/OrbitControls).
+  const THREE_VERSION = '0.170.0';
+  async function loadMeshLibs(){
+    const [THREE, plyMod, controlsMod] = await Promise.all([
+      import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/+esm`),
+      import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/loaders/PLYLoader.js/+esm`),
+      import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/controls/OrbitControls.js/+esm`),
+    ]);
+    return { THREE, PLYLoader: plyMod.PLYLoader, OrbitControls: controlsMod.OrbitControls };
+  }
+
+  async function loadMesh(url, displayName){
+    if(isLoading) return;
+    isLoading = true;
+    loadTriggers.forEach(id => el(id).disabled = true);
+
+    try{
+      if(objectUrl && objectUrl !== url){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
+      await teardown();
+      emptyState.classList.add('hidden');
+      setStatus('Chargement du mesh…');
+      // SuperSplat est un éditeur de splats, pas de mesh : rien de pertinent à lui envoyer ici.
+      currentSceneUrl = null;
+
+      const { THREE, PLYLoader, OrbitControls } = await loadMeshLibs();
+      const container = el('viewer');
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0a0e13);
+      const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.01, 1000);
+
+      meshRenderer = new THREE.WebGLRenderer({ antialias: true });
+      meshRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      meshRenderer.setSize(container.clientWidth, container.clientHeight);
+      container.appendChild(meshRenderer.domElement);
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x1a2230, 1.1));
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+      dirLight.position.set(3, 6, 4);
+      scene.add(dirLight);
+
+      const geometry = await new PLYLoader().loadAsync(url, evt => {
+        if(evt.lengthComputable){
+          setStatus(`Téléchargement… ${((evt.loaded / evt.total) * 100).toFixed(1)}%`);
+        }
+      });
+      if(!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
+
+      const hasColor = geometry.hasAttribute('color');
+      const material = new THREE.MeshStandardMaterial({
+        vertexColors: hasColor,
+        color: hasColor ? 0xffffff : 0x9fb4c4,
+        roughness: 0.85,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+
+      geometry.computeBoundingSphere();
+      const bs = geometry.boundingSphere;
+      if(bs && isFinite(bs.radius) && bs.radius > 0){
+        mesh.position.sub(bs.center);
+        const dist = bs.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+        camera.position.set(0, 0, dist * 1.4);
+        camera.near = Math.max(dist / 100, 0.001);
+        camera.far = dist * 100;
+        camera.updateProjectionMatrix();
+      }else{
+        camera.position.set(0, 0, 3);
+      }
+      scene.add(mesh);
+
+      const controls = new OrbitControls(camera, meshRenderer.domElement);
+      controls.enableDamping = true;
+
+      meshResizeHandler = () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        meshRenderer.setSize(container.clientWidth, container.clientHeight);
+      };
+      window.addEventListener('resize', meshResizeHandler);
+
+      const animate = () => {
+        controls.update();
+        meshRenderer.render(scene, camera);
+        meshRAF = requestAnimationFrame(animate);
+      };
+      animate();
+
+      clearStatus();
+      readout.classList.add('live');
+      el('rScene').textContent = displayName.length > 22 ? displayName.slice(0,21)+'…' : displayName;
+      el('rFormat').textContent = 'MESH';
+      startFpsMeter();
+    }catch(err){
+      console.error(err);
+      setStatus('Échec du chargement du mesh — vérifie que le fichier contient bien un maillage', true);
+      await teardown();
+      emptyState.classList.remove('hidden');
+      readout.classList.remove('live');
+      el('rScene').textContent = '—'; el('rFormat').textContent = '—'; el('rFps').textContent = '—';
+    }finally{
+      isLoading = false;
+      loadTriggers.forEach(id => el(id).disabled = false);
+    }
+  }
+
+  function loadMeshFile(file){
+    if(objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+    loadMesh(objectUrl, file.name);
+  }
+
   // ---- Contrôles ----
   el('fileInput').addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
   el('emptyOpen').addEventListener('click', () => el('fileInput').click());
-  el('demoBtn').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, formatFromName(DEMO_NAME)));
-  el('emptyDemo').addEventListener('click', () => loadScene(DEMO_URL, DEMO_NAME, formatFromName(DEMO_NAME)));
+  el('meshFileInput').addEventListener('change', e => { if(e.target.files[0]) loadMeshFile(e.target.files[0]); });
+  el('emptyMesh').addEventListener('click', () => el('meshFileInput').click());
 
   // Un fichier ouvert localement (blob:) ne peut pas être transmis à SuperSplat
   // (autre origine) : on ouvre alors l'éditeur nu pour un glisser-déposer manuel.
