@@ -32,7 +32,11 @@ Les fichiers de splats sont volumineux. **GitHub bloque tout fichier > 100 Mo**,
 
 Formats acceptés par le viewer : `.ply`, `.splat`, `.ksplat`.
 
-Le bouton **Nettoyer ↗** ouvre la scène courante directement dans [SuperSplat](https://superspl.at/editor) (bruit, points isolés, rognage...). Pour une scène chargée via URL ou la démo, elle s'ouvre automatiquement ; pour un fichier local, l'éditeur s'ouvre nu et il suffit d'y glisser-déposer le fichier.
+Le bouton **Nettoyer ↗** ouvre la scène courante directement dans [SuperSplat](https://superspl.at/editor) (bruit, points isolés, rognage...). Pour une scène chargée via URL, elle s'ouvre automatiquement ; pour un fichier local, l'éditeur s'ouvre nu et il suffit d'y glisser-déposer le fichier.
+
+## 4. Visualiser un mesh (ex. export SuGaR)
+
+Le bouton **Mesh SuGaR** (à côté d'*Ouvrir un fichier*) charge un `.ply` de **maillage** (triangles, normales, couleurs par sommet) — typiquement une reconstruction de surface via [SuGaR](https://github.com/Anttwo/SuGaR), à ne pas confondre avec un `.ply` de Gaussian Splatting (nuage de splats). Le rendu passe par un pipeline Three.js dédié (`PLYLoader` + `OrbitControls`), indépendant du viewer de splats.
 
 ---
 
