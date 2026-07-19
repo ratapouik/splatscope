@@ -50,8 +50,9 @@ Une fois une scène chargée, deux panneaux apparaissent en haut à droite :
 
 - **Navigation** — `Accueil` recentre sur le cadrage initial, `Dessus`/`Face`/`Profil` sautent à des vues prédéfinies autour du point de pivot courant (orientées par rapport au `up` de la caméra active, pas un Y-monde fixe, pour rester cohérentes en mode splat comme en mode mesh/points).
 - **Mesure** — `Mesurer` active le mode clic : deux clics sur la scène tracent une ligne et affichent la distance dans le HUD (en unités de scène). `Calibrer` convertit cette distance en mètres en indiquant sa valeur réelle connue (utile en particulier pour les scènes Gaussian Splatting, reconstruites sans échelle réelle par défaut). `Effacer` retire la mesure.
+- **Volume** — `Tracer volume` puis clics successifs pour poser les sommets d'un polygone au sol (3 minimum), `Terminer` ferme le contour et calcule le volume au-dessus. Technique "cut/fill" : plan de référence = point le plus bas du polygone, hauteur de la scène échantillonnée sur une grille régulière à l'intérieur du contour (pas de triangulation Delaunay — plus simple et robuste face à un nuage bruité). Le HUD affiche aussi le **taux de couverture** (part des cellules de la grille contenant réellement des données) : un pourcentage faible signale un contour trop grand par rapport à la densité du nuage/splat. Converti en m³ si une calibration de distance a été faite.
 
-Aire et volume ne sont pas encore supportés — pour le volume en particulier, la notion n'a de sens direct que sur un mesh fermé (pas un simple nuage de points/splats), donc à traiter séparément si besoin.
+L'aire seule (sans volume) n'est pas encore exposée séparément dans le HUD.
 
 ---
 
