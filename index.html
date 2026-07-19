@@ -137,6 +137,13 @@
   #hint b{color:var(--txt);font-weight:500}
   @media(max-width:720px){#hint{display:none}}
 
+  /* ---------- Outils scène (navigation / mesure) : visibles seulement scène chargée ---------- */
+  .scene-tools{display:none;padding:6px;gap:6px}
+  #stage.scene-active .scene-tools{display:flex}
+  .scene-tools .btn{padding:6px 10px;font-size:10.5px}
+  #navPanel{right:16px;top:16px}
+  #measurePanel{right:16px;top:56px}
+
   /* barre d'état de chargement */
   #status{
     position:absolute;left:50%;top:20px;transform:translateX(-50%);z-index:12;
@@ -195,6 +202,8 @@
     <input id="fileInput" type="file" accept=".ply,.splat,.ksplat" />
     <label class="btn" for="meshFileInput" tabindex="0" title="Charger un mesh reconstruit (ex. export SuGaR), pas un nuage de splats">Mesh SuGaR</label>
     <input id="meshFileInput" type="file" accept=".ply" />
+    <label class="btn" for="pointCloudFileInput" tabindex="0" title="Charger un nuage de points classique (sommets + couleur, sans triangles ni propriétés Gaussian Splatting)">Nuage de points</label>
+    <input id="pointCloudFileInput" type="file" accept=".ply" />
     <button class="btn" id="superSplatBtn" title="Ouvrir dans SuperSplat pour nettoyer la scène (supprimer le bruit, rogner, etc.)">Nettoyer ↗</button>
   </div>
 </header>
@@ -229,6 +238,7 @@
     <div class="empty-actions">
       <button class="btn primary" id="emptyOpen">Ouvrir un fichier</button>
       <button class="btn" id="emptyMesh">Ouvrir un mesh SuGaR</button>
+      <button class="btn" id="emptyPointCloud">Ouvrir un nuage de points</button>
     </div>
   </div>
 
@@ -236,10 +246,24 @@
     <div class="row"><span class="k"><span class="live-dot"></span>Scène</span><span class="v" id="rScene">—</span></div>
     <div class="row"><span class="k">Format</span><span class="v" id="rFormat">—</span></div>
     <div class="row"><span class="k">FPS</span><span class="v" id="rFps">—</span></div>
+    <div class="row"><span class="k">Distance</span><span class="v" id="rDistance">—</span></div>
   </div>
 
   <div class="hud" id="hint">
     <b>glisser</b> orbite · <b>molette</b> zoom · <b>clic droit</b> panorama
+  </div>
+
+  <div class="hud scene-tools" id="navPanel">
+    <button class="btn" id="viewHome" title="Recentrer la vue">Accueil</button>
+    <button class="btn" id="viewTop" title="Vue de dessus">Dessus</button>
+    <button class="btn" id="viewFront" title="Vue de face">Face</button>
+    <button class="btn" id="viewSide" title="Vue de profil">Profil</button>
+  </div>
+
+  <div class="hud scene-tools" id="measurePanel">
+    <button class="btn" id="measureToggle" title="Cliquer deux points de la scène pour mesurer la distance">Mesurer</button>
+    <button class="btn" id="measureClear" title="Effacer la mesure en cours">Effacer</button>
+    <button class="btn" id="measureCalibrate" title="Indiquer la distance réelle de la dernière mesure pour convertir en mètres">Calibrer</button>
   </div>
 </div>
 
@@ -258,6 +282,16 @@
   let rafFps = null;      // boucle FPS
   let objectUrl = null;   // pour révoquer les blobs
   let currentSceneUrl = null; // URL absolue de la scène courante, si elle est publique (pas un blob local)
+
+  // ---- Navigation (vues prédéfinies) ----
+  let homeCameraPos = null, homeCameraTarget = null;
+
+  // ---- Mesure de distance + calibration ----
+  let measureMode = false;
+  let measurePoints = [];       // points en attente (0 ou 1 avant complétion d'une paire)
+  let measureObjects = [];      // marqueurs/ligne 3D de la mesure affichée
+  let lastMeasurementSceneUnits = null;
+  let sceneToMeters = null;     // ratio de calibration, null tant que non calibré
 
   function setStatus(msg, isError=false){
     statusText.textContent = msg;
@@ -278,8 +312,39 @@
   const formatLabel = name => (name.split('.').pop() || '').toUpperCase();
 
   let meshRenderer = null, meshRAF = null, meshResizeHandler = null;
+  let meshScene = null, meshCamera = null, meshControls = null, meshObject = null;
+
+  function activeCamera(){ return viewer ? viewer.camera : meshCamera; }
+  function activeControls(){ return viewer ? viewer.controls : meshControls; }
+  function activeScene(){ return viewer ? viewer.threeScene : meshScene; }
+
+  function clearMeasureObjects(){
+    const scene = activeScene();
+    measureObjects.forEach(obj => {
+      if(scene) scene.remove(obj);
+      obj.geometry?.dispose();
+      obj.material?.dispose();
+    });
+    measureObjects = [];
+  }
+
+  function updateMeasureReadout(){
+    if(lastMeasurementSceneUnits == null){ el('rDistance').textContent = '—'; return; }
+    el('rDistance').textContent = sceneToMeters != null
+      ? `${(lastMeasurementSceneUnits * sceneToMeters).toFixed(2)} m`
+      : `${lastMeasurementSceneUnits.toFixed(3)} u`;
+  }
 
   async function teardown(){
+    // Avant de démonter la scène active : les objets de mesure y sont rattachés,
+    // et la calibration/l'échelle d'une scène n'a aucun sens pour la suivante.
+    clearMeasureObjects();
+    measurePoints = [];
+    lastMeasurementSceneUnits = null;
+    sceneToMeters = null;
+    homeCameraPos = null; homeCameraTarget = null;
+    updateMeasureReadout();
+
     if(rafFps){ cancelAnimationFrame(rafFps); rafFps = null; }
     if(viewer){
       try{ await viewer.dispose(); }catch(e){}
@@ -288,6 +353,7 @@
     if(meshRAF){ cancelAnimationFrame(meshRAF); meshRAF = null; }
     if(meshResizeHandler){ window.removeEventListener('resize', meshResizeHandler); meshResizeHandler = null; }
     if(meshRenderer){ meshRenderer.dispose(); meshRenderer = null; }
+    meshScene = null; meshCamera = null; meshControls = null; meshObject = null;
     el('viewer').innerHTML = '';
   }
 
@@ -306,7 +372,7 @@
   }
 
   const stageLabel = { 0: 'Téléchargement', 1: 'Traitement', 2: 'Terminé' }; // LoaderStatus.{Downloading,Processing,Done}
-  const loadTriggers = ['urlBtn', 'fileInput', 'emptyOpen', 'meshFileInput', 'emptyMesh'];
+  const loadTriggers = ['urlBtn', 'fileInput', 'emptyOpen', 'meshFileInput', 'emptyMesh', 'pointCloudFileInput', 'emptyPointCloud'];
   let isLoading = false;
 
   async function loadScene(url, displayName, format){
@@ -368,9 +434,12 @@
       viewer.start();
       clearStatus();
       readout.classList.add('live');
+      stage.classList.add('scene-active');
       el('rScene').textContent = displayName.length > 22 ? displayName.slice(0,21)+'…' : displayName;
       el('rFormat').textContent = formatLabel(displayName);
       startFpsMeter();
+      homeCameraPos = viewer.camera.position.clone();
+      homeCameraTarget = viewer.controls.target.clone();
       // Un fichier local (blob:) n'est pas accessible depuis SuperSplat (autre origine) ;
       // seule une URL publique peut lui être transmise via son paramètre ?load=.
       currentSceneUrl = url.startsWith('blob:') ? null : new URL(url, location.href).href;
@@ -380,6 +449,7 @@
       await teardown();
       emptyState.classList.remove('hidden');
       readout.classList.remove('live');
+      stage.classList.remove('scene-active');
       el('rScene').textContent = '—'; el('rFormat').textContent = '—'; el('rFps').textContent = '—';
       currentSceneUrl = null;
     }finally{
@@ -394,19 +464,28 @@
     loadScene(objectUrl, file.name, formatFromName(file.name));
   }
 
-  // ---- Mesh (ex. export SuGaR) : rendu Three.js indépendant du viewer de splats,
+  // ---- Mesh / nuage de points : rendu Three.js indépendant du viewer de splats,
   // via les mêmes modules ESM CDN (three + addons PLYLoader/OrbitControls).
   const THREE_VERSION = '0.170.0';
+  let THREE_CORE = null; // cache du cœur three.js (sans addons), réutilisé par la mesure en mode splat
+
+  async function ensureThreeCore(){
+    if(!THREE_CORE) THREE_CORE = await import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/+esm`);
+    return THREE_CORE;
+  }
+
   async function loadMeshLibs(){
     const [THREE, plyMod, controlsMod] = await Promise.all([
-      import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/+esm`),
+      ensureThreeCore(),
       import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/loaders/PLYLoader.js/+esm`),
       import(`https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/examples/jsm/controls/OrbitControls.js/+esm`),
     ]);
     return { THREE, PLYLoader: plyMod.PLYLoader, OrbitControls: controlsMod.OrbitControls };
   }
 
-  async function loadMesh(url, displayName){
+  // Pipeline commun mesh / nuage de points : seule la construction de l'objet
+  // Three.js à partir de la géométrie chargée diffère entre les deux modes.
+  async function loadThreeAsset(url, displayName, kind, failMsg, buildObject){
     if(isLoading) return;
     isLoading = true;
     loadTriggers.forEach(id => el(id).disabled = true);
@@ -415,90 +494,119 @@
       if(objectUrl && objectUrl !== url){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
       await teardown();
       emptyState.classList.add('hidden');
-      setStatus('Chargement du mesh…');
-      // SuperSplat est un éditeur de splats, pas de mesh : rien de pertinent à lui envoyer ici.
+      setStatus(kind === 'POINTS' ? 'Chargement du nuage de points…' : 'Chargement du mesh…');
+      // SuperSplat est un éditeur de splats : rien de pertinent à lui envoyer pour ces modes.
       currentSceneUrl = null;
 
       const { THREE, PLYLoader, OrbitControls } = await loadMeshLibs();
       const container = el('viewer');
 
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0a0e13);
-      const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.01, 1000);
+      meshScene = new THREE.Scene();
+      meshScene.background = new THREE.Color(0x0a0e13);
+      meshCamera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.01, 1000);
 
       meshRenderer = new THREE.WebGLRenderer({ antialias: true });
       meshRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       meshRenderer.setSize(container.clientWidth, container.clientHeight);
       container.appendChild(meshRenderer.domElement);
 
-      scene.add(new THREE.HemisphereLight(0xffffff, 0x1a2230, 1.1));
+      meshScene.add(new THREE.HemisphereLight(0xffffff, 0x1a2230, 1.1));
       const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
       dirLight.position.set(3, 6, 4);
-      scene.add(dirLight);
+      meshScene.add(dirLight);
 
       const geometry = await new PLYLoader().loadAsync(url, evt => {
         if(evt.lengthComputable){
           setStatus(`Téléchargement… ${((evt.loaded / evt.total) * 100).toFixed(1)}%`);
         }
       });
-      if(!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
-
-      const hasColor = geometry.hasAttribute('color');
-      const material = new THREE.MeshStandardMaterial({
-        vertexColors: hasColor,
-        color: hasColor ? 0xffffff : 0x9fb4c4,
-        roughness: 0.85,
-        side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-
       geometry.computeBoundingSphere();
       const bs = geometry.boundingSphere;
-      if(bs && isFinite(bs.radius) && bs.radius > 0){
-        mesh.position.sub(bs.center);
-        const dist = bs.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
-        camera.position.set(0, 0, dist * 1.4);
-        camera.near = Math.max(dist / 100, 0.001);
-        camera.far = dist * 100;
-        camera.updateProjectionMatrix();
-      }else{
-        camera.position.set(0, 0, 3);
-      }
-      scene.add(mesh);
 
-      const controls = new OrbitControls(camera, meshRenderer.domElement);
-      controls.enableDamping = true;
+      meshObject = buildObject(THREE, geometry, bs);
+      if(bs && isFinite(bs.radius) && bs.radius > 0){
+        meshObject.position.sub(bs.center);
+        const dist = bs.radius / Math.sin(THREE.MathUtils.degToRad(meshCamera.fov / 2));
+        meshCamera.position.set(0, 0, dist * 1.4);
+        meshCamera.near = Math.max(dist / 100, 0.001);
+        meshCamera.far = dist * 100;
+        meshCamera.updateProjectionMatrix();
+      }else{
+        meshCamera.position.set(0, 0, 3);
+      }
+      meshScene.add(meshObject);
+
+      meshControls = new OrbitControls(meshCamera, meshRenderer.domElement);
+      meshControls.enableDamping = true;
 
       meshResizeHandler = () => {
-        camera.aspect = container.clientWidth / container.clientHeight;
-        camera.updateProjectionMatrix();
+        meshCamera.aspect = container.clientWidth / container.clientHeight;
+        meshCamera.updateProjectionMatrix();
         meshRenderer.setSize(container.clientWidth, container.clientHeight);
       };
       window.addEventListener('resize', meshResizeHandler);
 
       const animate = () => {
-        controls.update();
-        meshRenderer.render(scene, camera);
+        meshControls.update();
+        meshRenderer.render(meshScene, meshCamera);
         meshRAF = requestAnimationFrame(animate);
       };
       animate();
 
       clearStatus();
       readout.classList.add('live');
+      stage.classList.add('scene-active');
       el('rScene').textContent = displayName.length > 22 ? displayName.slice(0,21)+'…' : displayName;
-      el('rFormat').textContent = 'MESH';
+      el('rFormat').textContent = kind;
       startFpsMeter();
+      homeCameraPos = meshCamera.position.clone();
+      homeCameraTarget = meshControls.target.clone();
     }catch(err){
       console.error(err);
-      setStatus('Échec du chargement du mesh — vérifie que le fichier contient bien un maillage', true);
+      setStatus(failMsg, true);
       await teardown();
       emptyState.classList.remove('hidden');
       readout.classList.remove('live');
+      stage.classList.remove('scene-active');
       el('rScene').textContent = '—'; el('rFormat').textContent = '—'; el('rFps').textContent = '—';
     }finally{
       isLoading = false;
       loadTriggers.forEach(id => el(id).disabled = false);
     }
+  }
+
+  function loadMesh(url, displayName){
+    return loadThreeAsset(url, displayName, 'MESH',
+      'Échec du chargement du mesh — vérifie que le fichier contient bien un maillage',
+      (THREE, geometry) => {
+        if(!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
+        const hasColor = geometry.hasAttribute('color');
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: hasColor,
+          color: hasColor ? 0xffffff : 0x9fb4c4,
+          roughness: 0.85,
+          side: THREE.DoubleSide,
+        });
+        return new THREE.Mesh(geometry, material);
+      });
+  }
+
+  function loadPointCloud(url, displayName){
+    return loadThreeAsset(url, displayName, 'POINTS',
+      'Échec du chargement — vérifie que le fichier est bien un nuage de points .ply',
+      (THREE, geometry, bs) => {
+        const hasColor = geometry.hasAttribute('color');
+        // Taille proportionnelle à l'échelle de la scène plutôt qu'une valeur fixe,
+        // pour rester lisible aussi bien sur un petit objet que sur un relevé large.
+        const size = bs && bs.radius > 0 ? bs.radius * 0.006 : 0.02;
+        const material = new THREE.PointsMaterial({
+          size,
+          sizeAttenuation: true,
+          vertexColors: hasColor,
+          color: hasColor ? 0xffffff : 0x3fd7c9,
+        });
+        return new THREE.Points(geometry, material);
+      });
   }
 
   function loadMeshFile(file){
@@ -507,11 +615,19 @@
     loadMesh(objectUrl, file.name);
   }
 
+  function loadPointCloudFile(file){
+    if(objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+    loadPointCloud(objectUrl, file.name);
+  }
+
   // ---- Contrôles ----
   el('fileInput').addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
   el('emptyOpen').addEventListener('click', () => el('fileInput').click());
   el('meshFileInput').addEventListener('change', e => { if(e.target.files[0]) loadMeshFile(e.target.files[0]); });
   el('emptyMesh').addEventListener('click', () => el('meshFileInput').click());
+  el('pointCloudFileInput').addEventListener('change', e => { if(e.target.files[0]) loadPointCloudFile(e.target.files[0]); });
+  el('emptyPointCloud').addEventListener('click', () => el('pointCloudFileInput').click());
 
   // Un fichier ouvert localement (blob:) ne peut pas être transmis à SuperSplat
   // (autre origine) : on ouvre alors l'éditeur nu pour un glisser-déposer manuel.
@@ -530,6 +646,153 @@
   }
   el('urlBtn').addEventListener('click', loadFromUrl);
   el('urlInput').addEventListener('keydown', e => { if(e.key === 'Enter') loadFromUrl(); });
+
+  // ---- Navigation : vues prédéfinies ----
+  // Base orthonormée dérivée du camera.up courant plutôt que d'un Y-monde fixe : en
+  // mode splat, cameraUp encode la convention COLMAP du repère (pas Y-up), donc les
+  // vues doivent s'orienter par rapport à cet axe pour rester cohérentes.
+  function setPresetView(kind){
+    const camera = activeCamera(), controls = activeControls();
+    if(!camera || !controls) return;
+
+    if(kind === 'home'){
+      if(homeCameraPos && homeCameraTarget){
+        camera.position.copy(homeCameraPos);
+        controls.target.copy(homeCameraTarget);
+        controls.update();
+      }
+      return;
+    }
+
+    const V = camera.up.constructor; // même classe Vector3 que la lib active, sans import supplémentaire
+    const target = controls.target;
+    const dist = camera.position.distanceTo(target) || 5;
+    const up = camera.up.clone().normalize();
+    const ref = Math.abs(up.y) > 0.9 ? new V(0, 0, 1) : new V(0, 1, 0);
+    const right = ref.clone().cross(up).normalize();
+    const forward = up.clone().cross(right).normalize();
+
+    const offsets = {
+      top:   up.clone().multiplyScalar(dist).add(forward.clone().multiplyScalar(0.001 * dist)),
+      front: forward.clone().multiplyScalar(dist),
+      side:  right.clone().multiplyScalar(dist),
+    };
+    const offset = offsets[kind];
+    if(!offset) return;
+
+    camera.position.copy(target).add(offset);
+    controls.update();
+  }
+  el('viewHome').addEventListener('click', () => setPresetView('home'));
+  el('viewTop').addEventListener('click', () => setPresetView('top'));
+  el('viewFront').addEventListener('click', () => setPresetView('front'));
+  el('viewSide').addEventListener('click', () => setPresetView('side'));
+
+  // ---- Mesure de distance + calibration ----
+  async function addMeasurePoint(point){
+    const THREE = await ensureThreeCore();
+    const scene = activeScene();
+    if(!scene) return;
+
+    if(measurePoints.length === 0) clearMeasureObjects(); // nouvelle mesure : efface la précédente
+
+    const camera = activeCamera();
+    const refDist = camera ? camera.position.distanceTo(point) : 1;
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0x3fd7c9, depthTest: false })
+    );
+    marker.position.copy(point);
+    marker.scale.setScalar(Math.max(refDist * 0.006, 0.001));
+    marker.renderOrder = 999;
+    scene.add(marker);
+    measureObjects.push(marker);
+
+    measurePoints.push(point);
+
+    if(measurePoints.length === 2){
+      const [a, b] = measurePoints;
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([a, b]),
+        new THREE.LineBasicMaterial({ color: 0x3fd7c9, depthTest: false })
+      );
+      line.renderOrder = 998;
+      scene.add(line);
+      measureObjects.push(line);
+
+      lastMeasurementSceneUnits = a.distanceTo(b);
+      updateMeasureReadout();
+      measurePoints = []; // prêt pour une nouvelle mesure au prochain clic
+    }
+  }
+
+  async function handleMeasureClick(e){
+    const container = el('viewer');
+    const rect = container.getBoundingClientRect();
+    const offsetX = e.clientX - rect.left, offsetY = e.clientY - rect.top;
+    const THREE = await ensureThreeCore();
+
+    let point = null;
+    if(viewer && viewer.splatMesh){
+      const screenPos = new THREE.Vector2(offsetX, offsetY);
+      const dims = new THREE.Vector2();
+      viewer.getRenderDimensions(dims);
+      viewer.raycaster.setFromCameraAndScreenPosition(viewer.camera, screenPos, dims);
+      const hits = [];
+      viewer.raycaster.intersectSplatMesh(viewer.splatMesh, hits);
+      if(hits.length) point = hits[0].origin.clone();
+    }else if(meshObject && meshCamera){
+      const ndc = new THREE.Vector2(
+        (offsetX / container.clientWidth) * 2 - 1,
+        -(offsetY / container.clientHeight) * 2 + 1
+      );
+      const raycaster = new THREE.Raycaster();
+      if(meshObject.isPoints){
+        raycaster.params.Points.threshold = (meshObject.geometry.boundingSphere?.radius || 1) * 0.01;
+      }
+      raycaster.setFromCamera(ndc, meshCamera);
+      const hits = raycaster.intersectObject(meshObject, false);
+      if(hits.length) point = hits[0].point.clone();
+    }
+
+    if(point) addMeasurePoint(point);
+  }
+
+  let pointerDownPos = null;
+  el('viewer').addEventListener('pointerdown', e => { pointerDownPos = { x: e.clientX, y: e.clientY }; });
+  el('viewer').addEventListener('pointerup', e => {
+    const down = pointerDownPos;
+    pointerDownPos = null;
+    if(!measureMode || !down || e.button !== 0) return;
+    // Ignore les glissers (orbite/pan) : seul un clic quasi immobile compte comme une mesure.
+    if(Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+    handleMeasureClick(e);
+  });
+
+  el('measureToggle').addEventListener('click', () => {
+    measureMode = !measureMode;
+    el('measureToggle').classList.toggle('primary', measureMode);
+    el('viewer').style.cursor = measureMode ? 'crosshair' : '';
+  });
+  el('measureClear').addEventListener('click', () => {
+    clearMeasureObjects();
+    measurePoints = [];
+    lastMeasurementSceneUnits = null;
+    sceneToMeters = null;
+    updateMeasureReadout();
+  });
+  el('measureCalibrate').addEventListener('click', () => {
+    if(lastMeasurementSceneUnits == null){
+      alert('Fais d\'abord une mesure (deux points) avant de calibrer.');
+      return;
+    }
+    const input = prompt('Distance réelle entre ces deux points, en mètres :');
+    if(input == null) return;
+    const real = parseFloat(input.replace(',', '.'));
+    if(!isFinite(real) || real <= 0){ alert('Valeur invalide.'); return; }
+    sceneToMeters = real / lastMeasurementSceneUnits;
+    updateMeasureReadout();
+  });
 
   // ---- Glisser-déposer ----
   ['dragenter','dragover'].forEach(ev =>
