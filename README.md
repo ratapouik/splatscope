@@ -38,6 +38,22 @@ Le bouton **Nettoyer ↗** ouvre la scène courante directement dans [SuperSplat
 
 Le bouton **Mesh SuGaR** (à côté d'*Ouvrir un fichier*) charge un `.ply` de **maillage** (triangles, normales, couleurs par sommet) — typiquement une reconstruction de surface via [SuGaR](https://github.com/Anttwo/SuGaR), à ne pas confondre avec un `.ply` de Gaussian Splatting (nuage de splats). Le rendu passe par un pipeline Three.js dédié (`PLYLoader` + `OrbitControls`), indépendant du viewer de splats.
 
+## 5. Visualiser un nuage de points classique
+
+Le bouton **Nuage de points** charge un `.ply` de sommets seuls (position + couleur, sans triangles ni propriétés Gaussian Splatting) — ex. un export COLMAP sparse/dense ou un scan LiDAR exporté en PLY. Même pipeline Three.js que le mode Mesh, mais rendu en `THREE.Points` plutôt qu'en surface pleine.
+
+Ces trois modes (splat / mesh / nuage de points) lisent tous des fichiers `.ply`, mais avec des propriétés différentes : utilise le bon bouton selon le contenu réel du fichier, l'appli ne devine pas automatiquement.
+
+## 6. Navigation et mesure
+
+Une fois une scène chargée, deux panneaux apparaissent en haut à droite :
+
+- **Navigation** — `Accueil` recentre sur le cadrage initial, `Dessus`/`Face`/`Profil` sautent à des vues prédéfinies autour du point de pivot courant (orientées par rapport au `up` de la caméra active, pas un Y-monde fixe, pour rester cohérentes en mode splat comme en mode mesh/points).
+- **Mesure** — `Mesurer` active le mode clic : deux clics sur la scène tracent une ligne et affichent la distance dans le HUD (en unités de scène). `Calibrer` convertit cette distance en mètres en indiquant sa valeur réelle connue (utile en particulier pour les scènes Gaussian Splatting, reconstruites sans échelle réelle par défaut). `Effacer` retire la mesure.
+- **Volume** — `Tracer volume` puis clics successifs pour poser les sommets d'un polygone au sol (3 minimum), `Terminer` ferme le contour et calcule le volume au-dessus. Technique "cut/fill" : plan de référence = point le plus bas du polygone, hauteur de la scène échantillonnée sur une grille régulière à l'intérieur du contour (pas de triangulation Delaunay — plus simple et robuste face à un nuage bruité). Le HUD affiche aussi le **taux de couverture** (part des cellules de la grille contenant réellement des données) : un pourcentage faible signale un contour trop grand par rapport à la densité du nuage/splat. Converti en m³ si une calibration de distance a été faite.
+
+L'aire seule (sans volume) n'est pas encore exposée séparément dans le HUD.
+
 ---
 
 ## Structure
